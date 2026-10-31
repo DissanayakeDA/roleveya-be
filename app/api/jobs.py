@@ -2,13 +2,26 @@ import uuid
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_storage
 from app.core.config import get_settings
 from app.db import get_db
-from app.models import ApplicationEvent, ApplicationStatus, Cv, EventType, Job, Priority, User, WorkMode, utcnow
+from app.models import (
+    ApplicationEvent,
+    ApplicationStatus,
+    Cv,
+    CvAnalysis,
+    CvDocument,
+    CvVersion,
+    EventType,
+    Job,
+    Priority,
+    User,
+    WorkMode,
+    utcnow,
+)
 from app.schemas.jobs import EventOut, JobCreate, JobOut, JobPage, JobSort, JobUpdate, NoteCreate, StatusChange
 from app.services.files import FileKind, clean_filename, content_disposition, read_upload
 from app.services.storage import CloudinaryStorage, StorageError
@@ -128,6 +141,10 @@ def delete_job(
 ):
     job = get_owned_job(db, user, job_id)
     poster = (job.poster_public_id, job.poster_resource_type)
+    # The database does this too (foreign keys); done here so it doesn't depend on the engine enforcing them.
+    db.execute(delete(CvDocument).where(CvDocument.job_id == job.id))
+    db.execute(delete(CvAnalysis).where(CvAnalysis.job_id == job.id))
+    db.execute(update(CvVersion).where(CvVersion.job_id == job.id).values(job_id=None))
     db.delete(job)
     db.commit()
     if poster[0]:

@@ -8,7 +8,9 @@ from app.core.config import get_settings
 from app.core.cookies import ACCESS_COOKIE, REFRESH_COOKIE
 from app.db import get_db
 from app.models import User
+from app.services.ai import GroqClient
 from app.services.cognito import AuthServiceError, CognitoService
+from app.services.latex import LatexCompiler, WordConverter
 from app.services.ocr import LocalOcr
 from app.services.storage import CloudinaryStorage
 from app.services.tokens import (
@@ -39,6 +41,21 @@ def get_storage() -> CloudinaryStorage:
 @lru_cache
 def get_ocr() -> LocalOcr:
     return LocalOcr()
+
+
+@lru_cache
+def get_latex() -> LatexCompiler:
+    return LatexCompiler(get_settings())
+
+
+@lru_cache
+def get_word() -> WordConverter:
+    return WordConverter()
+
+
+@lru_cache
+def get_ai() -> GroqClient:
+    return GroqClient(get_settings())
 
 
 def _verify_or_none(verifier: CognitoTokenVerifier, token: str | None) -> dict | None:

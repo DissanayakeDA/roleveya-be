@@ -19,11 +19,14 @@ os.environ.update(
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.api.deps import get_cognito, get_ocr, get_storage, get_token_verifier  # noqa: E402
+from app.api.deps import get_ai, get_cognito, get_latex, get_ocr, get_storage, get_token_verifier, get_word  # noqa: E402
 from app.db import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services.cognito import AuthServiceError, AuthTokens  # noqa: E402
+from app.services.ai import AiUnavailableError  # noqa: E402
 from app.services.job_extract import TextLine  # noqa: E402
+from app.services.latex import LatexCompileError  # noqa: E402
+from app.services.latex_guard import LatexIssue, check_latex  # noqa: E402
 from app.services.storage import StoredFile  # noqa: E402
 from app.services.tokens import TokenError, TokenExpiredError  # noqa: E402
 
@@ -109,14 +112,68 @@ class FakeOcr:
         return self.lines
 
 
+class FakeLatex:
+    """Runs the real safety check; \\undefinedthing stands in for a TeX error on its line."""
+
+    available = True
+
+    def __init__(self):
+        self.compiled: list[str] = []
+
+    def compile(self, source):
+        issues = check_latex(source)
+        if issues:
+            raise LatexCompileError(issues)
+        marker = r"\undefinedthing"
+        if marker in source:
+            line = source[: source.index(marker)].count("\n") + 1
+            raise LatexCompileError([LatexIssue(line, "Undefined control sequence")])
+        self.compiled.append(source)
+        return PDF_BYTES
+
+
+class FakeWord:
+    available = True
+
+    def convert(self, source):
+        issues = check_latex(source)
+        if issues:
+            raise LatexCompileError(issues)
+        return b"PK\x03\x04 fake docx"
+
+
+class FakeAi:
+    """Returns the queued replies in order; an exception in the queue is raised instead."""
+
+    model = "test-model"
+
+    def __init__(self):
+        self.available = True
+        self.replies: list = []
+        self.calls: list[dict] = []
+
+    def json(self, **kwargs):
+        if not self.available:
+            raise AiUnavailableError()
+        self.calls.append(kwargs)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
 @pytest.fixture
 def fakes():
     cognito, storage, ocr = FakeCognito(), FakeStorage(), FakeOcr()
+    latex, word, ai = FakeLatex(), FakeWord(), FakeAi()
     app.dependency_overrides[get_cognito] = lambda: cognito
     app.dependency_overrides[get_token_verifier] = lambda: FakeVerifier()
     app.dependency_overrides[get_storage] = lambda: storage
     app.dependency_overrides[get_ocr] = lambda: ocr
-    yield {"cognito": cognito, "storage": storage, "ocr": ocr}
+    app.dependency_overrides[get_latex] = lambda: latex
+    app.dependency_overrides[get_word] = lambda: word
+    app.dependency_overrides[get_ai] = lambda: ai
+    yield {"cognito": cognito, "storage": storage, "ocr": ocr, "latex": latex, "word": word, "ai": ai}
     app.dependency_overrides.clear()
 
 

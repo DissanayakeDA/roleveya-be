@@ -1,7 +1,8 @@
 # Roleveya API (roleveya-be)
 
 FastAPI backend for the Roleveya job tracker: auth (Cognito), jobs, application history, CVs and job
-posters (Cloudinary), preferences and the dashboard summary. Data lives in Neon Postgres.
+posters (Cloudinary), preferences, the dashboard summary, and the CV studio (LaTeX CVs tailored per job,
+with AI suggestions from Groq). Data lives in Neon Postgres.
 
 ## Run it
 
@@ -77,6 +78,65 @@ python -m app.services.ocr
 
 RapidOCR installs the headless build of OpenCV, which doesn't need any desktop libraries on a server.
 
+### CV studio (LaTeX CVs, tailoring, saved versions)
+
+The CV studio keeps master CVs as LaTeX, makes a working copy for each job, and saves the result as a
+version that can't be changed afterwards (its PDF is also a normal CV, so it can be picked as the CV sent).
+It needs three things on the server:
+
+| Feature | Needs | Cost |
+|---|---|---|
+| PDF preview and saved versions | [Tectonic](https://tectonic-typesetting.github.io) (a single-file LaTeX engine) | Free |
+| Word (.docx) downloads | pandoc, bundled by the `pypandoc_binary` package in `requirements.txt` | Free |
+| AI suggestions and PDF-to-LaTeX | A Groq API key in `GROQ_API_KEY` | Free plan, rate-limited |
+
+Anything missing is switched off and the UI says so; the rest keeps working.
+
+**Install Tectonic on Windows** (it isn't a Python package). In PowerShell, from `roleveya-be`:
+
+```powershell
+New-Item -ItemType Directory -Force .tools | Out-Null
+Invoke-WebRequest -Uri "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.17.0/tectonic-0.17.0-x86_64-pc-windows-msvc.zip" -OutFile .tools\tectonic.zip
+Expand-Archive .tools\tectonic.zip -DestinationPath .tools -Force
+Remove-Item .tools\tectonic.zip
+.\.tools\tectonic.exe --version
+```
+
+The API finds `.tools\tectonic.exe` by itself (or `tectonic` on PATH, or the path in `TECTONIC_PATH`). On
+Linux, download the matching build from the same release page. The first compile of a template downloads
+the LaTeX packages it uses (cached afterwards in your user profile), so it can take a minute; later ones
+take a second or two.
+
+**Templates with their own class file.** Some popular templates ship a `.cls` file that isn't part of
+LaTeX, and users can't upload one. The most common, the `resume` class from Overleaf's "Medium Length
+Professional CV" (`\documentclass{resume}` with `\name`, `\address`, `rSection` and `rSubsection`), has a
+stand-in written for this app in `app/services/tex/resume.cls`, which is copied next to every compile.
+Word downloads spell its commands out for pandoc. To support another class, add its `.cls` there and its
+name to `ALLOWED_CLASSES` in `app/services/latex_guard.py`.
+
+**Groq:** create a key at https://console.groq.com/keys and put it in `GROQ_API_KEY`. The default model,
+`openai/gpt-oss-120b`, supports strict JSON output, which both AI tasks rely on. Only the job post and the
+CV's text are sent. Groq's free plan limits tokens per minute and per day
+([your limits](https://console.groq.com/settings/limits)); a comparison uses roughly 4,000 to 7,000 tokens, so
+results are stored and the same CV and post are never sent twice unless the user asks.
+
+What the AI does, and doesn't:
+
+- **Compare a CV with a job post:** skills the CV shows, skills it's missing (required or nice to have), up to
+  eight edits quoting exact LaTeX to replace, and keywords. Edits only reword what's there; anything that
+  adds a skill is marked "Only if it's true". Nothing changes until the user applies an edit.
+- **PDF to LaTeX:** the PDF's text is read on the server (pypdfium2, or the local OCR for scanned PDFs),
+  the AI sorts it into sections without rewording, and the server lays it out in the chosen template. The
+  layout is the template's, not the original PDF's.
+
+**Compiling LaTeX from users safely.** LaTeX can read files (`\input{/etc/passwd}`) and embed them in
+the PDF, so every document passes `app/services/latex_guard.py` before compiling: only common CV packages
+and classes are allowed, commands that read or write files or build command names from text are refused,
+and file paths are rejected. Tectonic then runs with shell escape off (`--untrusted`), in a temporary folder,
+without the API's environment variables, with a time limit and at most two compiles at a time. pandoc runs
+with `--sandbox`. For a public deployment with many users, also run the API (or just the compiler) in a
+container that holds no secrets, since a deny-list check can't promise to catch everything LaTeX can do.
+
 ## How it fits together
 
 | Area | Endpoints |
@@ -87,6 +147,10 @@ RapidOCR installs the headless build of OpenCV, which doesn't need any desktop l
 | History | `GET/POST /api/jobs/{id}/events`, `DELETE /api/jobs/{id}/events/{event_id}` (notes only), `GET /api/history` |
 | Posters | `POST/GET/DELETE /api/jobs/{id}/poster` |
 | CVs | `GET/POST /api/cvs`, `PATCH/DELETE /api/cvs/{id}`, `GET /api/cvs/{id}/file` |
+| CV studio | `GET /api/studio/status`, `GET/POST /api/cv-documents`, `POST /api/cv-documents/convert` (PDF to LaTeX), `GET/PATCH/DELETE /api/cv-documents/{id}`, `POST /api/cv-documents/{id}/versions` |
+| Compiling | `POST /api/latex/compile` (PDF as base64; errors are a 200 with `ok: false`), `POST /api/latex/docx` |
+| Tailoring | `GET /api/jobs/{id}/tailoring`, `POST /api/jobs/{id}/tailoring/draft`, `/analysis`, `/versions` |
+| Saved versions | `GET /api/cv-versions`, `GET /api/cv-versions/{id}`, `GET /api/cv-versions/{id}/docx` (no edit endpoint; deleting the CV deletes the version) |
 | Preferences | `GET/PUT /api/preferences` |
 | Dashboard | `GET /api/dashboard/summary` |
 

@@ -33,8 +33,20 @@ class Settings(BaseSettings):
     max_cv_mb: int = 5
     max_poster_mb: int = 5
     max_cvs_per_user: int = 20
+    # Tailored versions are stored as CVs too, but counted separately so they don't crowd out uploads.
+    max_cv_versions_per_user: int = 200
+    max_cv_documents_per_user: int = 30
 
-    @field_validator("cognito_client_secret", "cognito_region", "cookie_domain", mode="before")
+    # Groq (AI suggestions and PDF-to-LaTeX). Leave the key blank to turn those features off.
+    groq_api_key: str | None = None
+    groq_model: str = "openai/gpt-oss-120b"
+
+    # LaTeX compiling with Tectonic. Blank: look for "tectonic" on PATH, then in .tools/ next to app/.
+    tectonic_path: str | None = None
+    latex_timeout_seconds: int = 120
+    max_latex_kb: int = 200
+
+    @field_validator("cognito_client_secret", "cognito_region", "cookie_domain", "groq_api_key", "tectonic_path", mode="before")
     @classmethod
     def _blank_is_none(cls, value: str | None) -> str | None:
         if isinstance(value, str) and not value.strip():

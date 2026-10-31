@@ -1,13 +1,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_storage
 from app.core.config import get_settings
 from app.db import get_db
-from app.models import Cv, Job, User
+from app.models import Cv, CvVersion, Job, User
 from app.schemas.cvs import CvLabel, CvOut, CvUpdate
 from app.services.files import FileKind, clean_filename, content_disposition, read_upload
 from app.services.storage import CloudinaryStorage, StorageError
@@ -41,7 +41,8 @@ def upload_cv(
     storage: CloudinaryStorage = Depends(get_storage),
 ):
     settings = get_settings()
-    count = db.scalar(select(func.count()).select_from(Cv).where(Cv.user_id == user.id)) or 0
+    # Versions saved from the CV studio have their own limit.
+    count = db.scalar(select(func.count()).select_from(Cv).where(Cv.user_id == user.id, ~Cv.version.has())) or 0
     if count >= settings.max_cvs_per_user:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"You can keep up to {settings.max_cvs_per_user} CVs.")
 
@@ -60,7 +61,7 @@ def upload_cv(
         storage_resource_type=stored.resource_type,
         storage_format=stored.format,
         size_bytes=stored.size_bytes,
-        is_default=count == 0,
+        is_default=db.scalar(select(Cv.id).where(Cv.user_id == user.id).limit(1)) is None,
     )
     db.add(cv)
     db.commit()
@@ -75,6 +76,9 @@ def update_cv(
     cv = _get_owned_cv(db, user, cv_id)
     if body.label is not None:
         cv.label = body.label
+        if cv.version is not None:
+            # The name is a label, not content, so renaming doesn't break a version being unchangeable.
+            cv.version.name = body.label
     if body.is_default:
         _make_default(db, user, cv)
     db.commit()
@@ -115,6 +119,9 @@ def delete_cv(
     stored = (cv.storage_public_id, cv.storage_resource_type)
 
     db.execute(update(Job).where(Job.cv_id == cv.id).values(cv_id=None))
+    # A saved version is its PDF plus its LaTeX; deleting the CV deletes both.
+    db.execute(delete(CvVersion).where(CvVersion.cv_id == cv.id))
+    db.expire(cv, ["version"])
     db.delete(cv)
     db.flush()
     if was_default:
