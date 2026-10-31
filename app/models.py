@@ -126,6 +126,13 @@ class Cv(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
+    # Set when this CV is a tailored version saved from the CV studio (its PDF is this row's file).
+    version: Mapped["CvVersion | None"] = relationship(back_populates="cv", lazy="selectin", uselist=False)
+
+    @property
+    def version_id(self) -> uuid.UUID | None:
+        return self.version.id if self.version else None
+
 
 class Job(Base):
     __tablename__ = "jobs"
@@ -198,3 +205,59 @@ class ApplicationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
 
     job: Mapped[Job] = relationship(back_populates="events")
+
+
+class CvDocument(Base):
+    """An editable LaTeX CV: a master CV (job_id is None) or the working copy being tailored for one job."""
+
+    __tablename__ = "cv_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    latex: Mapped[str] = mapped_column(Text)
+    # Template it was started from ("classic", "modern"), or None for pasted LaTeX.
+    template: Mapped[str | None] = mapped_column(String(30))
+    # A job's working copy: one per job, removed with the job.
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), unique=True)
+    based_on_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cv_documents.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow, onupdate=utcnow)
+
+
+class CvVersion(Base):
+    """A saved, unchangeable CV: the exact LaTeX and the PDF compiled from it (stored as a Cv row).
+
+    There is deliberately no way to edit one. Changing a CV means saving a new version.
+    """
+
+    __tablename__ = "cv_versions"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cv_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("cvs.id", ondelete="CASCADE"), unique=True)
+    job_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("jobs.id", ondelete="SET NULL"), index=True)
+    document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("cv_documents.id", ondelete="SET NULL"))
+    name: Mapped[str] = mapped_column(String(120))
+    latex: Mapped[str] = mapped_column(Text)
+    latex_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)
+
+    cv: Mapped[Cv] = relationship(back_populates="version")
+    job: Mapped[Job | None] = relationship(lazy="joined")
+
+
+class CvAnalysis(Base):
+    """An AI comparison of a CV with a job post. Kept so the same CV and post aren't sent to the AI twice."""
+
+    __tablename__ = "cv_analyses"
+    __table_args__ = (Index("ix_cv_analyses_job_created", "job_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    job_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"))
+    # Hash of the CV LaTeX and the job details the analysis was made from.
+    input_sha256: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(100))
+    result: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, default=utcnow)

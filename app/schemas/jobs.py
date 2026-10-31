@@ -104,6 +104,8 @@ class CvSummary(OrmModel):
     id: uuid.UUID
     label: str
     original_filename: str
+    # Set when the CV is a tailored version saved from the CV studio.
+    version_id: uuid.UUID | None = None
 
 
 class JobOut(OrmModel):

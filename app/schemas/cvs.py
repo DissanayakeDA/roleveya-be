@@ -14,6 +14,7 @@ class CvOut(OrmModel):
     size_bytes: int
     is_default: bool
     created_at: datetime
+    version_id: uuid.UUID | None = None
 
 
 class CvUpdate(BaseModel):

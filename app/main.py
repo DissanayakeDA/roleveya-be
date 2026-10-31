@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.api import auth, cvs, dashboard, extract, history, jobs, preferences
+from app.api import auth, cvs, dashboard, extract, history, jobs, preferences, studio, tailoring
 from app.core.config import get_settings
 from app.core.middleware import CSRF_HEADER, ApiGuardMiddleware
 from app.db import Base, engine
@@ -81,5 +81,5 @@ def health():
 
 
 # extract before jobs, so /jobs/extract/... is never read as a job id.
-for module in (auth, extract, jobs, cvs, preferences, dashboard, history):
+for module in (auth, extract, jobs, tailoring, cvs, studio, preferences, dashboard, history):
     app.include_router(module.router, prefix="/api")
